@@ -32,7 +32,6 @@ def test_help_lists_commands() -> None:
 @pytest.mark.parametrize(
     "args",
     [
-        ["serve"],
         ["doctor"],
     ],
 )
@@ -227,3 +226,31 @@ def test_report_api_error_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(cli.app, ["report"])
     assert result.exit_code == cli.EXIT_GOOGLE
     assert "HttpError" in result.output
+
+
+def test_serve_migrates_and_starts_uvicorn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import uvicorn
+
+    import ttmon.db.migrate
+    import ttmon.web.app
+
+    base = load_config()
+    cfg = base.model_copy(
+        update={
+            "paths": base.paths.model_copy(
+                update={"db_file": tmp_path / "ttmon.db", "data_dir": tmp_path / "data"}
+            )
+        }
+    )
+    migrated: list[Path] = []
+    served: list[tuple[str, int]] = []
+    monkeypatch.setattr(cli, "get_config", lambda: cfg)
+    monkeypatch.setattr(ttmon.db.migrate, "upgrade_to_head", migrated.append)
+    monkeypatch.setattr(ttmon.web.app, "create_app", lambda *_a, **_k: "app")
+    monkeypatch.setattr(uvicorn, "run", lambda _app, host, port, **_k: served.append((host, port)))
+
+    result = runner.invoke(cli.app, ["serve"])
+
+    assert result.exit_code == 0
+    assert migrated == [tmp_path / "ttmon.db"]
+    assert served == [(cfg.web.host, cfg.web.port)]

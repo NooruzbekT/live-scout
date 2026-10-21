@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Сегодня, {{ day_title }}</h1>
+
+<div class="row" style="margin-bottom:16px">
+  {% if current %}
+    <span class="badge s-running">Идёт {{ current }} с {{ local(current_started) }}</span>
+  {% else %}
+    <span class="badge">Задач сейчас нет</span>
+  {% endif %}
+  {% if report %}
+    <a class="btn" href="{{ report.url }}" target="_blank" rel="noopener">Отчёт за день ↗</a>
+  {% endif %}
+  <button onclick="startReport()">Собрать отчёт сейчас</button>
+</div>
+
+<div class="cards">
+  {% for slot, slot_cfg, run in slots %}
+  <div class="card">
+    <h3>{{ slot_cfg.title }}
+      {% if run %}<span class="badge s-{{ run.status }}">{{ statuses.get(run.status, run.status) }}</span>
+      {% else %}<span class="badge">не запускался</span>{% endif %}
+    </h3>
+    <div class="muted">старт по расписанию {{ slot_cfg.start.strftime("%H:%M") }}
+      {% if next_runs.get("collect_" ~ slot) %}· следующий {{ local(next_runs["collect_" ~ slot], "%d.%m %H:%M") }}{% endif %}</div>
+    {% if run %}
+      <div style="margin:10px 0"><span class="big">{{ counts[slot] }}</span>
+        <span class="muted">продающих из {{ target }} · открыто {{ run.rooms_opened }}{% if run.rooms_failed %}, ошибок {{ run.rooms_failed }}{% endif %}</span></div>
+      <div class="muted">{{ local(run.started_at) }} – {{ local(run.finished_at) }}</div>
+      {% if run.error %}<div class="muted" style="color:var(--bad)">{{ run.error }}</div>{% endif %}
+    {% endif %}
+    <div class="row" style="margin-top:12px">
+      <button class="primary" data-slot="{{ slot }}" data-title="{{ slot_cfg.title }}" onclick="startSlot(this.dataset.slot, this.dataset.title)">Запустить сейчас</button>
+      <a class="btn" href="/day/{{ day.isoformat() }}?slot={{ slot }}">Эфиры</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Продающие эфиры сегодня ({{ streams|length }})</h2>
+{% if streams %}
+<div class="shots">
+  {% for s in streams %}
+  <a href="{{ s.screenshot_url or s.url }}" target="_blank" rel="noopener" title="{{ s.category or '' }} · {{ s.prices_text }}">
+    {% if s.screenshot_url %}<img src="{{ s.screenshot_url }}" alt="" loading="lazy">{% endif %}
+    <span>{{ local(s.captured_at) }} · @{{ s.username }}</span>
+    <span class="muted">{{ s.category or "—" }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">Пока нет.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startSlot(slot, title) {
+  if (!confirm(`Запустить сбор «${title}» сейчас?`)) return;
+  try { await call("POST", `/api/runs/${slot}`); toast(`Сбор «${title}» запущен`); setTimeout(() => location.reload(), 3000); }
+  catch (e) { toast(`Не запущен: ${e.message}`); }
+}
+async function startReport() {
+  try { await call("POST", "/api/reports/{{ day.isoformat() }}"); toast("Отчёт собирается…"); setTimeout(() => location.reload(), 15000); }
+  catch (e) { toast(`Не запущен: ${e.message}`); }
+}
+{% if current %}setTimeout(() => location.reload(), 30000);{% endif %}
+</script>
+{% endblock %}

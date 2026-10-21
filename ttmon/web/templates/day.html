@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Эфиры {{ day_title }} — TT Live Monitor{% endblock %}
+{% block content %}
+<div class="row" style="justify-content:space-between; margin-bottom:12px">
+  <h1 style="margin:0">Эфиры за {{ day_title }}</h1>
+  <div class="row">
+    <a class="btn" href="/day/{{ prev_day.isoformat() }}">← {{ prev_day.strftime("%d.%m") }}</a>
+    <a class="btn" href="/day/{{ next_day.isoformat() }}">{{ next_day.strftime("%d.%m") }} →</a>
+    {% if report %}<a class="btn" href="{{ report.url }}" target="_blank" rel="noopener">Отчёт ↗</a>{% endif %}
+  </div>
+</div>
+
+<form class="row" method="get" style="margin-bottom:14px">
+  <select name="slot">
+    <option value="">все слоты</option>
+    {% for key, s in slots.items() %}<option value="{{ key }}" {% if slot == key %}selected{% endif %}>{{ s.title }}</option>{% endfor %}
+  </select>
+  <select name="selling">
+    <option value="">все эфиры</option>
+    <option value="true" {% if selling == true %}selected{% endif %}>продающие</option>
+    <option value="false" {% if selling == false %}selected{% endif %}>непродающие</option>
+  </select>
+  <button>Показать</button>
+  <span class="muted">Правки попадут в отчёт при следующей сборке.</span>
+</form>
+
+{% if streams %}
+<table>
+  <tr><th></th><th>Слот / №</th><th>Эфир</th><th style="width:190px">Категория</th>
+      <th style="width:280px">Цены (через «;»)</th><th>Продающий</th><th>Исключить</th><th></th></tr>
+  {% for s in streams %}
+  <tr id="row-{{ s.id }}" class="{% if s.excluded %}excluded{% endif %}">
+    <td>{% if s.screenshot_url %}<a href="{{ s.screenshot_url }}" target="_blank"><img src="{{ s.screenshot_url }}" alt="" loading="lazy"></a>{% endif %}</td>
+    <td>{{ slots[s.slot].title if s.slot in slots else s.slot }}<br><span class="muted">№ {{ s.n or "—" }} · {{ local(s.captured_at) }}</span></td>
+    <td><a href="{{ s.url }}" target="_blank" rel="noopener">@{{ s.username }}</a><br>
+        <span class="muted">{{ s.nickname }}</span>
+        {% if s.confidence is not none %}<br><span class="muted" title="{{ s.ai_reason or '' }}">AI: {{ "%.0f"|format(s.confidence * 100) }}%{% if s.manual_override %} · правка{% endif %}</span>{% endif %}</td>
+    <td><select data-field="category">
+      <option value="">—</option>
+      {% for c in categories %}<option {% if c == s.category %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select></td>
+    <td><textarea data-field="prices_text" rows="2" placeholder="Пижама: 12500; Худи: 3000">{{ s.prices_text if s.prices_text != no_price_text else '' }}</textarea></td>
+    <td><input type="checkbox" data-field="is_selling" {% if s.is_selling %}checked{% endif %}></td>
+    <td><input type="checkbox" data-field="excluded" {% if s.excluded %}checked{% endif %}></td>
+    <td><button onclick="save({{ s.id }})">Сохранить</button></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">Эфиров нет.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function save(id) {
+  const row = document.getElementById(`row-${id}`);
+  const field = (f) => row.querySelector(`[data-field=${f}]`);
+  // только изменённые поля: нетронутые AI-цены не превращаются в ручные
+  const body = {};
+  const prices = field("prices_text"), category = field("category");
+  if (prices.value !== prices.defaultValue) body.prices_text = prices.value;
+  for (const f of ["is_selling", "excluded"]) {
+    if (field(f).checked !== field(f).defaultChecked) body[f] = field(f).checked;
+  }
+  const initial = [...category.options].find((o) => o.defaultSelected);
+  if (category.value && category.value !== (initial ? initial.value : "")) body.category = category.value;
+  if (!Object.keys(body).length) { toast("Изменений нет"); return; }
+  try {
+    const saved = await call("PATCH", `/api/streams/${id}`, body);
+    row.classList.toggle("excluded", saved.excluded);
+    prices.defaultValue = prices.value;
+    for (const f of ["is_selling", "excluded"]) field(f).defaultChecked = field(f).checked;
+    for (const o of category.options) o.defaultSelected = o.value === category.value;
+    toast(`Сохранено: @${saved.username}`);
+  } catch (e) { toast(`Не сохранено: ${e.message}`); }
+}
+</script>
+{% endblock %}

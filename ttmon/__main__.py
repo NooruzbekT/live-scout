@@ -88,8 +88,21 @@ def main(ctx: typer.Context) -> None:
 
 @app.command()
 def serve() -> None:
-    """Веб-панель и планировщик."""
-    _not_implemented(8)
+    """Веб-панель и планировщик: слоты и отчёт по расписанию (Ctrl+C — остановить)."""
+    import uvicorn
+
+    from ttmon.db.migrate import upgrade_to_head
+    from ttmon.media.layout import SCREENSHOTS_DIR
+    from ttmon.web.app import create_app
+
+    config = get_config()
+    db_file = project_path(config.paths.db_file)
+    upgrade_to_head(db_file)
+    screenshots = project_path(config.paths.data_dir) / SCREENSHOTS_DIR
+    web = create_app(config, db_file, screenshots)
+    typer.echo(f"Панель: http://{config.web.host}:{config.web.port}")
+    # log_config=None: логи идут через structlog (файл serve), access-лог не нужен
+    uvicorn.run(web, host=config.web.host, port=config.web.port, log_config=None, access_log=False)
 
 
 @app.command()

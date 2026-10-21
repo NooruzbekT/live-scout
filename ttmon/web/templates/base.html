@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}TT Live Monitor{% endblock %}</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#6b7280; --line:#e5e7eb;
+          --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --run:#1d4ed8; --accent:#111827; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { background:var(--accent); color:#fff; padding:12px 24px; display:flex; gap:24px;
+           align-items:center; }
+  header a { color:#fff; text-decoration:none; opacity:.85; }
+  header a:hover { opacity:1; }
+  header strong { font-size:17px; margin-right:auto; }
+  main { max-width:1200px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 16px; }
+  h2 { font-size:17px; margin:28px 0 12px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h3 { margin:0 0 8px; font-size:16px; display:flex; justify-content:space-between; }
+  .muted { color:var(--muted); font-size:13px; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:99px; background:#eef0f3; }
+  .s-ok { color:var(--ok); background:#dcfce7; } .s-partial { color:var(--warn); background:#fef3c7; }
+  .s-failed, .s-aborted { color:var(--bad); background:#fee2e2; } .s-running { color:var(--run); background:#dbeafe; }
+  .big { font-size:28px; font-weight:600; }
+  button, .btn { font:inherit; border:1px solid var(--line); background:#fff; border-radius:8px;
+                 padding:6px 12px; cursor:pointer; color:var(--text); text-decoration:none; display:inline-block; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .shots { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  .shots a { display:block; background:var(--card); border:1px solid var(--line); border-radius:8px;
+             overflow:hidden; text-decoration:none; color:var(--text); font-size:12px; }
+  .shots img { width:100%; aspect-ratio:9/16; object-fit:cover; display:block; background:#ddd; }
+  .shots span { display:block; padding:4px 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line);
+          border-radius:10px; overflow:hidden; }
+  th, td { padding:8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:14px; }
+  th { background:#f3f4f6; font-weight:600; }
+  td img { width:64px; border-radius:4px; display:block; }
+  tr.excluded td { opacity:.45; }
+  td textarea, td select { width:100%; font:inherit; padding:4px; border:1px solid var(--line); border-radius:6px; resize:vertical; }
+  #toast { position:fixed; bottom:20px; right:20px; background:var(--accent); color:#fff; padding:10px 16px;
+           border-radius:8px; display:none; max-width:420px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>TT Live Monitor</strong>
+  <a href="/">Сегодня</a>
+  <a href="/day/{{ day.isoformat() }}">Эфиры дня</a>
+</header>
+<main>{% block content %}{% endblock %}</main>
+<div id="toast"></div>
+<script>
+function toast(text) {
+  const el = document.getElementById("toast");
+  el.textContent = text; el.style.display = "block";
+  clearTimeout(window._toast); window._toast = setTimeout(() => el.style.display = "none", 5000);
+}
+async function call(method, url, body) {
+  // Content-Type обязателен: без JSON сервер отклоняет изменяющие запросы (защита от CSRF)
+  const write = method !== "GET" && method !== "HEAD";
+  const resp = await fetch(url, {method, headers: {"Content-Type": "application/json"},
+                                 body: write ? JSON.stringify(body || {}) : undefined});
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : resp.status);
+  return data;
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

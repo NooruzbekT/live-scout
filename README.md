@@ -20,7 +20,7 @@ python scripts/upload_template.py шаблон.xlsx   # шаблон отчёт�
 
 ```powershell
 python -m ttmon --help
-python -m ttmon serve                    # панель http://127.0.0.1:8000 + расписание
+python -m ttmon serve                    # панель http://127.0.0.1:8765 + расписание
 python -m ttmon collect --slot morning
 python -m ttmon report --date 2026-10-16
 python -m ttmon report --test           # отчёт по тестовому слоту

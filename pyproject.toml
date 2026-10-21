@@ -32,9 +32,9 @@ no_implicit_reexport = true
 strict_equality = true
 extra_checks = true
 
-# у googleapiclient, google_auth_oauthlib и httplib2 нет типов: ответы API — dict, разбираются вручную
+# без типов: googleapiclient (ответы API — dict), google_auth_oauthlib, httplib2, apscheduler 3.x
 [[tool.mypy.overrides]]
-module = ["googleapiclient.*", "google_auth_oauthlib.*", "httplib2"]
+module = ["googleapiclient.*", "google_auth_oauthlib.*", "httplib2", "apscheduler.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

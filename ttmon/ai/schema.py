@@ -3,7 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
-PriceSource = Literal["screen", "chat", "voice", "caption"]
+# manual — правка в панели; в схему ответа AI не входит (там свой enum)
+PriceSource = Literal["screen", "chat", "voice", "caption", "manual"]
 Currency = Literal["KZT", "RUB", "USD", "OTHER"]
 
 
