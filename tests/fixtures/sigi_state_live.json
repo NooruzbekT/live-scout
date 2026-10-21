@@ -1,0 +1,40 @@
+{
+  "LiveRoom": {
+    "loadingState": {},
+    "needLogin": false,
+    "liveRoomStatus": 0,
+    "liveRoomUserInfo": {
+      "user": {
+        "id": "6800000000000000001",
+        "uniqueId": "shop.almaty.test",
+        "nickname": "Женская одежда Алматы",
+        "secUid": "REDACTED",
+        "secret": false,
+        "verified": false,
+        "roomId": "7000000000000000001",
+        "signature": "",
+        "status": 2,
+        "followStatus": 0
+      },
+      "stats": {
+        "followingCount": 5,
+        "followerCount": 12477
+      },
+      "liveRoom": {
+        "coverUrl": "",
+        "title": "Сапалы киімдер төмен бағада",
+        "startTime": 1792079014,
+        "status": 2,
+        "liveRoomStats": {
+          "userCount": 144
+        },
+        "streamData": {
+          "pull_data": {
+            "stream_data": "{\"common\": {\"room_id\": 7000000000000000001, \"user_count\": 99}, \"data\": {\"hd\": {\"main\": {\"flv\": \"https://pull-flv.example.invalid/stage/stream-1_hd.flv?REDACTED\", \"hls\": \"\", \"lls\": \"\"}}, \"sd\": {\"main\": {\"flv\": \"https://pull-flv.example.invalid/stage/stream-1_sd.flv?REDACTED\", \"hls\": \"\", \"lls\": \"\"}}, \"ao\": {\"main\": {\"flv\": \"https://pull-flv.example.invalid/stage/stream-1.flv?REDACTED&only_audio=1\", \"hls\": \"\", \"lls\": \"\"}}}}"
+          }
+        }
+      }
+    }
+  },
+  "CurrentRoom": {}
+}
