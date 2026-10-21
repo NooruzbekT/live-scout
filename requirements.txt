@@ -12,7 +12,7 @@ apscheduler==3.11.3
 playwright==1.64.0
 httpx==0.28.1
 imageio-ffmpeg==0.6.0
-pillow==12.3.0
+pillow==13.0.0
 google-genai==2.31.0
 anthropic==1.14.0
 google-api-python-client==2.201.0
