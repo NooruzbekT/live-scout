@@ -1,0 +1,125 @@
+timezone: Asia/Almaty
+
+# время только в кавычках: YAML 1.1 читает 13:55 без кавычек как число 835
+slots:
+  morning: {title: "Утро",  start: "09:55", sheet: "Утро"}
+  noon:    {title: "Обед",  start: "13:55", sheet: "Обед"}
+  evening: {title: "Вечер", start: "17:55", sheet: "Вечер"}
+
+collect:
+  target_selling: 22            # стоп сбора: норма 20, берём с запасом
+  min_selling: 20               # норма: статус слота ok
+  max_minutes: 45
+  max_rooms_opened: 150
+  watch_seconds: [8, 14]        # сколько смотреть эфир перед скриншотом (случайно в диапазоне)
+  pause_between_rooms: [4, 9]   # пауза между эфирами
+  audio_seconds: 20
+  min_viewers: 1
+  allow_repeat_across_slots: true   # один продавец может быть утром и вечером
+  sources_order: [search]       # feed под входом пуст; following — после проверки
+  search_queries:
+    - одежда алматы
+    - женская одежда алматы
+    - детская одежда алматы
+    - обувь алматы
+    - косметика алматы
+    - сумки алматы
+    - бижутерия алматы
+    - парфюм алматы
+    - товары для дома алматы
+    - посуда алматы
+    - телефоны алматы
+    - оптом алматы
+    - распродажа алматы
+    - барахолка алматы
+    - киім алматы
+    - сатылым
+  rotate_queries: true          # каждый слот начинать с другого запроса
+  search_scrolls: 2             # максимум прокруток выдачи на запрос
+  scroll_px: 1200               # шаг прокрутки выдачи
+  scroll_pause_seconds: [1, 2]  # пауза после прокрутки
+  scroll_load_timeout_seconds: 5  # ждать догрузку карточек; нет роста — выдача кончилась
+  chat_messages: 30             # последних сообщений чата в AI
+
+browser:
+  channel: chrome
+  chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"   # для ttmon login
+  profile_dir: chrome-profile
+  viewport: {width: 1440, height: 900}
+  locale: ru-RU
+  headless: false
+
+guards:                         # «подряд» = без успешной страницы между ними
+  page_timeout_seconds: 30      # страница не загрузилась → пропуск эфира
+  probe_timeout_seconds: 5      # чтение текста страницы при проверке состояния
+  login_settle_seconds: 3       # ждать позднюю отрисовку кнопки «Войти»
+  network_retries: 3            # попыток загрузки при сетевой ошибке; таймаут не повторяется
+  network_retry_pause_seconds: 10
+  forbidden_pause_minutes: 5    # HTTP 403 → пауза и повтор той же страницы (эфир/выдача)
+  forbidden_max_in_row: 3       # 403 подряд → стоп слота
+  timeouts_max_in_row: 5        # таймаутов подряд → пауза
+  timeouts_pause_minutes: 2
+
+ai:
+  provider: gemini              # gemini | claude
+  selling_threshold: 0.7
+  send_audio: auto              # auto = только если продающий и цены не видно
+  max_image_width: 1280
+  prompt_file: prompts/classify.md
+  timeout_seconds: 60           # один запрос к AI
+  api_retries: 4                # попыток всего при 408/429/5xx/сети/таймауте
+  retry_wait_initial_seconds: 2 # экспоненциальная пауза между попытками (с джиттером)
+  retry_wait_max_seconds: 65  # минутный лимит free tier просит ждать 40–60 с; дольше — квота исчерпана
+  invalid_answer_retries: 1     # ответ не прошёл схему → повтор, затем is_selling = null
+  max_consecutive_failures: 3   # эфиров подряд с упавшим AI (квота/сбой) → стоп слота
+  thinking_budget: 0            # классификация по картинке, рассуждения не нужны: дешевле и быстрее
+
+evaluation:                     # ttmon eval, пороги приёмки классификатора
+  dir: data/eval                # скриншоты с лицами людей — вне git
+  selling_accuracy: 0.9
+  category_accuracy: 0.8
+  price_recall: 0.7
+
+categories:
+  - Одежда женская
+  - Одежда мужская
+  - Детские товары
+  - Обувь
+  - Сумки и аксессуары
+  - Украшения и бижутерия
+  - Косметика и уход
+  - Парфюмерия
+  - Электроника и гаджеты
+  - Товары для дома
+  - Текстиль
+  - Посуда и кухня
+  - Продукты и сладости
+  - Здоровье и БАДы
+  - Авто товары
+  - Другое
+
+google:
+  drive_root_folder_name: "TT эфиры"
+  report_title: "Отчёт TT эфиры {date}"   # новый файл на каждый день; {date} = ДД.ММ.ГГГГ
+  share_with: []               # email читателей отчёта, если нужно
+
+report:
+  auto_after_evening: true
+  fallback_time: "19:30"
+  no_price_text: "не указана"
+
+web:
+  host: 127.0.0.1               # только loopback: панель без авторизации
+  port: 8000
+
+paths:                          # относительные пути считаются от корня проекта
+  data_dir: data
+  logs_dir: logs
+  db_file: data/ttmon.db
+  secrets_dir: secrets
+  test_data_dir: data/test      # сухой прогон --slot test: своя БД и скриншоты, очищается при старте
+
+media:
+  font_path: "C:\\Windows\\Fonts\\arial.ttf"   # шрифт с кириллицей для штампа времени
+  jpeg_quality: 85              # скриншоты эфиров и ошибок
+  stamp_city: Алматы            # в плашке времени на скриншоте
