@@ -100,8 +100,10 @@ def test_bad_process_name_rejected(tmp_path: Path, process: str) -> None:
 
 
 def test_redact_registered_secret() -> None:
-    register_secret("Zk9-new-format-key-123")
-    assert redact("error with Zk9-new-format-key-123 inside") == "error with *** inside"
+    # собирается в тесте: литерал, похожий на ключ, сканер секретов GitHub считает утечкой
+    secret = "-".join(["fake", "value", "for", "redact"])
+    register_secret(secret)
+    assert redact(f"error with {secret} inside") == "error with *** inside"
 
 
 def test_redact_google_api_key() -> None:
