@@ -31,6 +31,7 @@ def build_classifier(cfg: AppConfig, settings: Settings) -> Classifier:
                 cfg=cfg.ai,
                 categories=cfg.categories,
                 system_prompt=load_prompt(cfg),
+                voice_prompt=project_path(cfg.ai.voice_prompt_file).read_text(encoding="utf-8"),
             )
         case "claude":
             raise AIConfigError("провайдер claude ещё не реализован")

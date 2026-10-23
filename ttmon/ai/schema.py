@@ -25,23 +25,57 @@ class Classification(BaseModel):
     reason: str
 
 
+class VoicePrice(BaseModel):
+    """Цена из второго прохода: source в схеме ответа нет, to_price ставит voice."""
+
+    item: str | None = None
+    raw: str | None = None
+    amount: int = Field(gt=0)
+    currency: Currency = "KZT"
+
+    def to_price(self) -> Price:
+        return Price(**self.model_dump(), source="voice")
+
+
+class VoiceAnswer(BaseModel):
+    """Второй проход: цены, названные голосом. speech — что слышно, для разбора."""
+
+    speech: str
+    prices: list[VoicePrice] = []
+
+
 class InvalidAnswer(ValueError):
     pass
 
 
-def response_schema(categories: list[str]) -> dict[str, Any]:
-    """JSON Schema для structured output. category — enum из config.yaml."""
-    price = {
+def _price_schema(sources: list[str] | None) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "item": {"type": ["string", "null"]},
+        "raw": {"type": ["string", "null"]},
+        "amount": {"type": "integer", "minimum": 1},
+        "currency": {"type": "string", "enum": ["KZT", "RUB", "USD", "OTHER"]},
+    }
+    required = ["amount", "currency"]
+    if sources:
+        properties["source"] = {"type": "string", "enum": sources}
+        required.append("source")
+    return {"type": "object", "properties": properties, "required": required}
+
+
+def voice_schema() -> dict[str, Any]:
+    return {
         "type": "object",
         "properties": {
-            "item": {"type": ["string", "null"]},
-            "raw": {"type": ["string", "null"]},
-            "amount": {"type": "integer", "minimum": 1},
-            "currency": {"type": "string", "enum": ["KZT", "RUB", "USD", "OTHER"]},
-            "source": {"type": "string", "enum": ["screen", "chat", "voice", "caption"]},
+            "speech": {"type": "string"},
+            "prices": {"type": "array", "items": _price_schema(None)},
         },
-        "required": ["amount", "currency", "source"],
+        "required": ["speech", "prices"],
     }
+
+
+def response_schema(categories: list[str]) -> dict[str, Any]:
+    """JSON Schema для structured output. category — enum из config.yaml."""
+    price = _price_schema(["screen", "chat", "voice", "caption"])
     return {
         "type": "object",
         "properties": {
@@ -64,3 +98,10 @@ def parse_answer(raw: str, categories: list[str]) -> Classification:
     if result.category not in categories:
         raise InvalidAnswer(f"категория не из списка: {result.category!r}")
     return result
+
+
+def parse_voice(raw: str) -> VoiceAnswer:
+    try:
+        return VoiceAnswer.model_validate(json.loads(raw))
+    except (ValueError, ValidationError) as exc:
+        raise InvalidAnswer(f"ответ не по схеме: {exc}".splitlines()[0]) from exc

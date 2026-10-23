@@ -322,13 +322,14 @@ def test_cleanup(tmp_path: Path) -> None:
     old_error = logs / "errors" / "20260901T100000000000Z_slot_stopped.jpg"
     fresh_error = logs / "errors" / "20261020T100000000000Z_slot_stopped.jpg"
     audio = tmp_path / "data" / "audio" / "2026-10-10"
-    audio.mkdir(parents=True)
-    old_audio = audio / "shop_2026-10-10.m4a"
+    (audio / "noon").mkdir(parents=True)
+    old_audio = audio / "noon" / "shop_1200.mp3"
     for path in (old_log, fresh_log, old_error, fresh_error, old_audio):
         path.write_text("x", encoding="utf-8")
-    # скриншоты ошибок без даты в формате ГГГГ-ММ-ДД — по времени изменения
+    # скриншоты ошибок и звук без даты ГГГГ-ММ-ДД в имени — по времени изменения
     old = dt.datetime(2026, 9, 1, 10, tzinfo=dt.UTC).timestamp()
     os.utime(old_error, (old, old))
+    os.utime(old_audio, (old, old))
 
     removed = sched.cleanup(cfg, today)
 

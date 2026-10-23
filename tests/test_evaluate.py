@@ -7,7 +7,7 @@ import pytest
 from PIL import Image
 
 from ttmon.ai import evaluate
-from ttmon.ai.base import ClassifyInput, ClassifyResult
+from ttmon.ai.base import ClassifyInput, ClassifyResult, VoiceInput, VoiceResult
 from ttmon.ai.schema import Classification, Price
 from ttmon.db.migrate import upgrade_to_head
 from ttmon.settings import load_config
@@ -69,6 +69,9 @@ class ScriptedClassifier:
 
     async def classify(self, data: ClassifyInput) -> ClassifyResult:
         return ClassifyResult(self._answers[data.username], "fake", "{}")
+
+    async def listen(self, data: VoiceInput) -> VoiceResult:
+        raise NotImplementedError
 
 
 def _answer(selling: bool, category: str, amounts: list[int]) -> Classification:
@@ -162,6 +165,9 @@ class BrokenAI:
 
     async def classify(self, data: ClassifyInput) -> ClassifyResult:
         raise ConnectionError("503")
+
+    async def listen(self, data: VoiceInput) -> VoiceResult:
+        raise NotImplementedError
 
 
 async def test_transient_ai_error_counts_as_invalid(tmp_path: Path, four_streams: Path) -> None:

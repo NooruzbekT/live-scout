@@ -118,6 +118,7 @@ class AIConfig(_Section):
     send_audio: Literal["auto", "always", "never"]
     max_image_width: int = Field(gt=0)
     prompt_file: Path
+    voice_prompt_file: Path
     timeout_seconds: float = Field(gt=0)
     api_retries: int = Field(ge=1)
     retry_wait_initial_seconds: float = Field(ge=0)

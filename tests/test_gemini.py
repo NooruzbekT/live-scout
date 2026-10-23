@@ -8,7 +8,7 @@ import pytest
 from google.genai import errors
 from tenacity import wait_none
 
-from ttmon.ai.base import NO_CHAT, ChatLine, ClassifyInput, describe
+from ttmon.ai.base import NO_CHAT, ChatLine, ClassifyInput, VoiceInput, describe, describe_voice
 from ttmon.ai.factory import AIConfigError, build_classifier, load_prompt
 from ttmon.ai.gemini import AIUnavailable, GeminiClassifier, quota_exhausted, retry_delay_seconds
 from ttmon.ai.schema import InvalidAnswer, parse_answer, response_schema
@@ -74,6 +74,7 @@ def _classifier(
         CFG.ai,
         CATEGORIES,
         "prompt",
+        "voice prompt",
         client_factory=client_factory,
         retry_wait=wait_none(),
     )
@@ -292,3 +293,60 @@ async def test_all_keys_exhausted_stays_on_last_key() -> None:
 
     assert models.clients_for == ["k1", "k2"]
     assert len(models.calls) == 3
+
+
+VOICE_INPUT = VoiceInput(
+    audio_mp3=b"ID3audio",
+    username="shop.almaty.test",
+    nickname="Женская одежда Алматы",
+    title="",
+    products=["куртка", "платье"],
+)
+
+
+async def test_listen_returns_voice_prices_normalized() -> None:
+    answer = {
+        "speech": "Продавец называет цену куртки.",
+        "prices": [{"item": "Куртка", "raw": "8.9к", "amount": 89, "currency": "KZT"}],
+    }
+    classifier, models = _classifier([answer])
+
+    result = await classifier.listen(VOICE_INPUT)
+
+    assert [(p.amount, p.source) for p in result.prices] == [(8900, "voice")]
+    assert result.speech == "Продавец называет цену куртки."
+    assert result.error is None and result.usage.prompt_tokens == 1200
+    call = models.calls[0]
+    assert call["config"].response_json_schema["required"] == ["speech", "prices"]
+    assert call["config"].system_instruction == "voice prompt"
+    audio, text = call["contents"].parts
+    assert audio.inline_data.mime_type == "audio/mp3"
+    assert "куртка, платье" in text.text
+
+
+async def test_listen_invalid_answer_gives_error_without_prices() -> None:
+    classifier, models = _classifier([{"prices": []}, "not json"])
+
+    result = await classifier.listen(VOICE_INPUT)
+
+    assert result.prices == [] and result.error is not None
+    assert len(models.calls) == CFG.ai.invalid_answer_retries + 1
+
+
+async def test_listen_switches_key_on_daily_quota() -> None:
+    classifier, models = _classifier(
+        [_quota_error(DAILY, "12480s"), {"speech": "Музыка.", "prices": []}], keys=("k1", "k2")
+    )
+
+    result = await classifier.listen(VOICE_INPUT)
+
+    assert result.speech == "Музыка."
+    assert models.clients_for == ["k1", "k2"]
+
+
+def test_describe_voice_lists_products() -> None:
+    text = describe_voice(VOICE_INPUT)
+    assert text.startswith("<данные_эфира>") and "Товары на экране: куртка, платье" in text
+    assert "Товары на экране: —" in describe_voice(
+        VoiceInput(audio_mp3=b"", username="u", nickname="n", title="")
+    )

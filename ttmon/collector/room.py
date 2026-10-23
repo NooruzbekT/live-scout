@@ -1,8 +1,11 @@
+import asyncio
 import json
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import structlog
 from playwright.async_api import Error as PlaywrightError
@@ -18,6 +21,8 @@ from ttmon.timeutil import now_utc
 log = structlog.get_logger(__name__)
 
 BackToResults = Callable[[], Awaitable[bool]]
+# запись звука эфира в фоне: None — звук не записан
+AudioRecorder = Callable[[RoomInfo], Coroutine[Any, Any, Path | None]]
 
 VIDEO_READY_JS = "s => { const v = document.querySelector(s); return !!v && v.readyState >= 2; }"
 CHAT_JS = """([msgSel, ownerSel, limit]) => [...document.querySelectorAll(msgSel)].slice(-limit)
@@ -37,6 +42,8 @@ class RoomCapture:
     captured_at: datetime
     chat: list[ChatMessage]
     screenshot_jpeg: bytes
+    # владелец — вызывающий: дождаться или отменить
+    audio: asyncio.Task[Path | None] | None = None
 
 
 class RoomError(RuntimeError):
@@ -81,12 +88,14 @@ class RoomVisitor:
         policy: GuardPolicy,
         sleep: Sleep,
         rng: random.Random,
+        recorder: AudioRecorder | None = None,
     ) -> None:
         self._cfg = cfg
         self._tracker = tracker
         self._policy = policy
         self._sleep = sleep
         self._rng = rng
+        self._recorder = recorder
 
     @property
     def _timeout_ms(self) -> float:
@@ -154,8 +163,6 @@ class RoomVisitor:
             log.info("room_skipped", username=username, state="video_not_ready")
             return None
 
-        await self._sleep(self._rng.uniform(*self._cfg.collect.watch_seconds))
-
         info = await read_sigi(page)
         if not sel.USERNAME.fullmatch(info.username):
             raise RoomError(f"недопустимый uniqueId в SIGI_STATE: {info.username!r}")
@@ -170,6 +177,29 @@ class RoomVisitor:
             log.info("room_skipped", username=username, state="ended", status=info.status)
             return None
 
-        chat = await read_chat(page, self._cfg.collect.chat_messages)
-        screenshot = await page.screenshot(type="jpeg", quality=self._cfg.media.jpeg_quality)
-        return RoomCapture(info=info, captured_at=now_utc(), chat=chat, screenshot_jpeg=screenshot)
+        # звук пишется, пока смотрим эфир и ждём первый ответ AI
+        audio = (
+            asyncio.create_task(self._recorder(info))
+            if self._recorder is not None and info.audio_url
+            else None
+        )
+        try:
+            await self._sleep(self._rng.uniform(*self._cfg.collect.watch_seconds))
+            chat = await read_chat(page, self._cfg.collect.chat_messages)
+            screenshot = await page.screenshot(type="jpeg", quality=self._cfg.media.jpeg_quality)
+        except BaseException:
+            if audio is not None:
+                await cancel_audio(audio)
+            raise
+        return RoomCapture(
+            info=info, captured_at=now_utc(), chat=chat, screenshot_jpeg=screenshot, audio=audio
+        )
+
+
+async def cancel_audio(task: asyncio.Task[Path | None]) -> None:
+    """Звук не нужен: ffmpeg убит, файл удалён — и недописанный, и готовый
+    (запись могла закончиться, пока первый проход AI ждал минутный лимит)."""
+    task.cancel()
+    result = (await asyncio.gather(task, return_exceptions=True))[0]
+    if isinstance(result, Path):
+        await asyncio.to_thread(result.unlink, True)

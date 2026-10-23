@@ -13,7 +13,7 @@ collect:
   max_rooms_opened: 150
   watch_seconds: [8, 14]        # сколько смотреть эфир перед скриншотом (случайно в диапазоне)
   pause_between_rooms: [4, 9]   # пауза между эфирами
-  audio_seconds: 20
+  audio_seconds: 45             # пишется в фоне; 20 с — 0 цен голосом из 7 эфиров (23.10)
   min_viewers: 1
   allow_repeat_across_slots: true   # один продавец может быть утром и вечером
   sources_order: [search]       # feed под входом пуст; following — после проверки
@@ -63,9 +63,10 @@ guards:                         # «подряд» = без успешной с�
 ai:
   provider: gemini              # gemini | claude
   selling_threshold: 0.7
-  send_audio: auto              # auto = только если продающий и цены не видно
+  send_audio: auto              # auto = продающий без цен; always = любой продающий; never
   max_image_width: 1280
   prompt_file: prompts/classify.md
+  voice_prompt_file: prompts/voice.md   # второй проход со звуком
   timeout_seconds: 60           # один запрос к AI
   api_retries: 4                # попыток всего при 408/429/5xx/сети/таймауте
   retry_wait_initial_seconds: 2 # экспоненциальная пауза между попытками (с джиттером)

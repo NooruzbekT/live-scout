@@ -4,6 +4,8 @@ SCREENSHOTS_DIR = "screenshots"
 # кадр без штампа в том виде, в каком его видел AI: для eval и разбора ошибок классификации
 # (на штампе дата и время — их можно принять за цену)
 AI_INPUTS_DIR = "ai_inputs"
+# звук, отправленный во второй проход AI: рядом со screenshots/; срок — AUDIO_KEEP_DAYS
+AUDIO_DIR = "audio"
 
 
 def ai_input_path(screenshot: Path) -> Path | None:

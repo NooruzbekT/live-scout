@@ -4,17 +4,26 @@ import json
 import random
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 from playwright.async_api import BrowserContext, Page
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ttmon.ai.base import ChatLine, Classifier, ClassifyInput, ClassifyResult, Usage
+from ttmon.ai.base import (
+    ChatLine,
+    Classifier,
+    ClassifyInput,
+    ClassifyResult,
+    Usage,
+    VoiceInput,
+)
 from ttmon.ai.gemini import AIUnavailable
+from ttmon.ai.schema import Classification, Price
 from ttmon.collector import selectors as sel
 from ttmon.collector.browser import LoginState, first_page, login_check, open_browser
 from ttmon.collector.guards import (
@@ -25,7 +34,14 @@ from ttmon.collector.guards import (
     StopSlot,
     save_error_screenshot,
 )
-from ttmon.collector.room import BackToResults, RoomCapture, RoomVisitor
+from ttmon.collector.room import (
+    AudioRecorder,
+    BackToResults,
+    RoomCapture,
+    RoomVisitor,
+    cancel_audio,
+)
+from ttmon.collector.sigi import RoomInfo
 from ttmon.collector.sources import Candidate, SearchCursor, SearchSource, query_order
 from ttmon.db import repo
 from ttmon.db.migrate import upgrade_to_head
@@ -33,7 +49,8 @@ from ttmon.db.models import Run, RunStatus, Stream
 from ttmon.db.session import create_engine, make_sessionmaker
 from ttmon.lock import exclusive_lock
 from ttmon.logging import redact
-from ttmon.media.layout import SCREENSHOTS_DIR, ai_input_path
+from ttmon.media.audio import record_audio
+from ttmon.media.layout import AUDIO_DIR, SCREENSHOTS_DIR, ai_input_path
 from ttmon.media.resize import fit_width
 from ttmon.media.stamp import stamp_image, stamp_text
 from ttmon.settings import PROJECT_ROOT, AppConfig, project_path
@@ -42,6 +59,8 @@ from ttmon.timeutil import now_utc, to_almaty, today_almaty
 log = structlog.get_logger(__name__)
 
 BrowserFactory = Callable[[AppConfig], AbstractAsyncContextManager[BrowserContext]]
+# record_audio(url, out, seconds): подменяется в тестах, ffmpeg и сеть не нужны
+RecordAudio = Callable[[str, Path, int], Coroutine[Any, Any, Path | None]]
 TEST_SLOT = "test"
 
 
@@ -95,6 +114,38 @@ def write_screenshot(
     return path
 
 
+def audio_path(audio_dir: Path, info: RoomInfo, slot: str, cfg: AppConfig) -> Path:
+    local = to_almaty(now_utc(), cfg.tz)
+    path = audio_dir / local.date().isoformat() / slot / f"{info.username}_{local:%H%M}.mp3"
+    if not path.resolve().is_relative_to(audio_dir.resolve()):
+        raise ValueError(f"путь звука вне {audio_dir}: {path}")
+    return path
+
+
+def needs_voice(send_audio: str, selling: bool | None, c: Classification | None) -> bool:
+    """Второй проход со звуком — только для продающего; auto — если цен не нашлось."""
+    if not selling or c is None or send_audio == "never":
+        return False
+    return send_audio == "always" or not c.prices
+
+
+def merge_voice_prices(c: Classification, voice: list[Price]) -> int:
+    """Сумма с экрана голосом не дублируется (товар там и в речи называют по-разному);
+    внутри голоса — по товару и сумме: «платье 5000, юбка 5000» — две цены, одна цена,
+    сказанная на двух языках, — одна. Возвращает число добавленных."""
+    screen = {(p.amount, p.currency) for p in c.prices}
+    heard: set[tuple[str | None, int, str]] = set()
+    added = []
+    for price in voice:
+        key = ((price.item or "").casefold() or None, price.amount, price.currency)
+        if (price.amount, price.currency) in screen or key in heard:
+            continue
+        heard.add(key)
+        added.append(price)
+    c.prices = [*c.prices, *added]
+    return len(added)
+
+
 def is_selling(result: ClassifyResult | None, threshold: float) -> bool | None:
     """None — AI не спрашивали (--no-ai) или ответ так и не прошёл схему: в отчёт не идёт."""
     if result is None or result.classification is None:
@@ -120,6 +171,7 @@ def build_stream(
     ai: ClassifyResult | None,
     selling: bool | None,
     n: int | None,
+    audio: Path | None = None,
 ) -> Stream:
     info = capture.info
     c = ai.classification if ai else None
@@ -150,6 +202,7 @@ def build_stream(
         ai_reason=c.reason if c else (ai.error if ai else None),
         ai_model=ai.model if ai else None,
         ai_raw=ai.raw if ai else None,
+        audio_path=_stored_path(audio) if audio else None,
     )
 
 
@@ -178,6 +231,7 @@ class SlotCollector:
         rng: random.Random | None = None,
         browser: BrowserFactory = open_browser,
         classifier: Classifier | None = None,
+        record: RecordAudio | None = None,
     ) -> None:
         self._cfg = cfg
         self._slot = slot
@@ -187,6 +241,8 @@ class SlotCollector:
         self._rng = rng or random.Random()
         self._browser = browser
         self._classifier = classifier
+        self._record = record if classifier is not None else None
+        self._audio_dir = screenshots_dir.parent / AUDIO_DIR
         self.selling = 0
         self.ai_tokens = Usage()
         self._ai_failures_in_row = 0
@@ -222,6 +278,8 @@ class SlotCollector:
         seen.add(candidate.username)
         self.opened += 1
         written: list[Path] = []
+        capture: RoomCapture | None = None
+        audio: Path | None = None
         try:
             capture = await visitor.visit(page, candidate.username, seen, back_to_results)
             if capture is None:
@@ -233,11 +291,14 @@ class SlotCollector:
             )
             ai = await self._classify(capture, ai_image)
             selling = is_selling(ai, self._cfg.ai.selling_threshold)
+            audio = await self._voice(capture, ai, selling)
+            if audio is not None:
+                written.append(audio)
             n = await repo.next_n(session, run.id) if selling else None
             screenshot = write_screenshot(capture, run.slot, self._screenshots_dir, self._cfg, n)
             written.append(screenshot)
             written.append(write_ai_input(ai_image, screenshot))
-            session.add(build_stream(capture, candidate, run, screenshot, ai, selling, n))
+            session.add(build_stream(capture, candidate, run, screenshot, ai, selling, n, audio))
             run.rooms_opened += 1
             run.selling_found += bool(selling)
             await session.commit()
@@ -267,6 +328,75 @@ class SlotCollector:
             log.warning("room_failed", username=candidate.username, error=_error_text(exc))
             await self._error_screenshot(page, "room_error")
             await session.commit()
+        finally:
+            # звук, не дошедший до Stream: запись могла закончиться до сбоя эфира
+            if capture is not None and capture.audio is not None and audio is None:
+                await cancel_audio(capture.audio)
+
+    def _recorder(self, run: Run) -> AudioRecorder | None:
+        record = self._record
+        if record is None:
+            return None
+        seconds = self._cfg.collect.audio_seconds
+
+        def start(info: RoomInfo) -> Coroutine[Any, Any, Path | None]:
+            assert info.audio_url is not None
+            out = audio_path(self._audio_dir, info, run.slot, self._cfg)
+            return record(info.audio_url, out, seconds)
+
+        return start
+
+    async def _voice(
+        self, capture: RoomCapture, ai: ClassifyResult | None, selling: bool | None
+    ) -> Path | None:
+        """Второй проход со звуком (раздел 10). Путь — если звук ушёл в AI и сохранён.
+        Звук не записан или AI упал — эфир остаётся с ценами первого прохода."""
+        task = capture.audio
+        if task is None:
+            return None
+        c = ai.classification if ai else None
+        if self._classifier is None or not needs_voice(self._cfg.ai.send_audio, selling, c):
+            await cancel_audio(task)
+            return None
+        assert c is not None
+        info = capture.info
+        try:
+            audio = await task
+        except Exception as exc:
+            log.warning("audio_failed", username=info.username, error=_error_text(exc))
+            return None
+        if audio is None:
+            return None
+        try:
+            voice = await self._classifier.listen(
+                VoiceInput(
+                    audio_mp3=await asyncio.to_thread(audio.read_bytes),
+                    username=info.username,
+                    nickname=info.nickname,
+                    title=info.title,
+                    products=c.products,
+                )
+            )
+        except Exception as exc:
+            # любой сбой (и AIUnavailable) не роняет эфир и не идёт в счётчик сбоев AI:
+            # кончилась квота — слот остановит первый проход следующего эфира
+            log.warning("ai_voice_failed", username=info.username, error=_error_text(exc))
+            await asyncio.to_thread(audio.unlink, True)
+            return None
+        self._add_usage(voice.usage)
+        if voice.error is not None:
+            log.warning("ai_voice_failed", username=info.username, error=voice.error)
+        added = merge_voice_prices(c, voice.prices)
+        log.info("voice_prices", username=info.username, found=len(voice.prices), added=added)
+        return audio
+
+    def _add_usage(self, usage: Usage) -> None:
+        """Фактический расход токенов за слот (оба прохода) — в лог slot_finished."""
+        self.ai_tokens = Usage(
+            self.ai_tokens.prompt_tokens + usage.prompt_tokens,
+            self.ai_tokens.output_tokens + usage.output_tokens,
+            self.ai_tokens.thinking_tokens + usage.thinking_tokens,
+        )
 
     async def _classify(self, capture: RoomCapture, image: bytes) -> ClassifyResult | None:
         """Сбой API после всех ретраев — эфир пишется с is_selling=None;
@@ -295,12 +425,7 @@ class SlotCollector:
                 raise AIUnavailable(f"{self._ai_failures_in_row} сбоев AI подряд: {error}") from exc
             return ClassifyResult(None, self._classifier.model, None, error)
         self._ai_failures_in_row = 0
-        # фактический расход токенов за слот — в лог
-        self.ai_tokens = Usage(
-            self.ai_tokens.prompt_tokens + result.usage.prompt_tokens,
-            self.ai_tokens.output_tokens + result.usage.output_tokens,
-            self.ai_tokens.thinking_tokens + result.usage.thinking_tokens,
-        )
+        self._add_usage(result.usage)
         return result
 
     async def _loop(self, session: AsyncSession, run: Run, page: Page) -> None:
@@ -308,7 +433,9 @@ class SlotCollector:
         seen = await repo.seen_usernames(session, run.id)
         tracker = StatusTracker(page)
         policy = GuardPolicy(cfg.guards, self._sleep)
-        visitor = RoomVisitor(cfg, tracker, policy, self._sleep, self._rng)
+        visitor = RoomVisitor(
+            cfg, tracker, policy, self._sleep, self._rng, recorder=self._recorder(run)
+        )
         source = SearchSource(cfg, self._sleep, self._rng)
         slots: list[str] = list(cfg.slots)
         slot_index = slots.index(self._slot) if self._slot in slots else 0
@@ -475,5 +602,8 @@ def collect_command(
     with exclusive_lock(collect_lock_path(cfg)):
         db_file, screenshots_dir = _slot_storage(cfg, slot)
         upgrade_to_head(db_file)
-        collector = SlotCollector(cfg, slot, limit, screenshots_dir, classifier=classifier)
+        record = record_audio if cfg.ai.send_audio != "never" else None
+        collector = SlotCollector(
+            cfg, slot, limit, screenshots_dir, classifier=classifier, record=record
+        )
         return asyncio.run(collector.collect(db_file))

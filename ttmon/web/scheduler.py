@@ -8,6 +8,7 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from ttmon.media.layout import AUDIO_DIR
 from ttmon.settings import AppConfig, project_path
 from ttmon.timeutil import format_report_date, today_almaty
 from ttmon.web.jobs import JobRunner, ttmon_command
@@ -21,7 +22,7 @@ REPORT_TIMEOUT_S = 15 * 60
 LOGS_KEEP_DAYS = 30
 AUDIO_KEEP_DAYS = 7
 CLEANUP_TIME = (3, 0)
-# дата в имени — логи и звук; скриншоты ошибок (20261021T…Z) — по mtime
+# дата в имени — логи; звук (дата в папке) и скриншоты ошибок (20261021T…Z) — по mtime
 DATED_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 ReportDone = Callable[[dt.date], Awaitable[bool]]
@@ -77,7 +78,7 @@ def cleanup(cfg: AppConfig, today: dt.date) -> int:
     removed = 0
     targets = [
         (project_path(cfg.paths.logs_dir), LOGS_KEEP_DAYS),
-        (project_path(cfg.paths.data_dir) / "audio", AUDIO_KEEP_DAYS),
+        (project_path(cfg.paths.data_dir) / AUDIO_DIR, AUDIO_KEEP_DAYS),
     ]
     for directory, keep in targets:
         if not directory.is_dir():

@@ -32,9 +32,12 @@ no_implicit_reexport = true
 strict_equality = true
 extra_checks = true
 
-# без типов: googleapiclient (ответы API — dict), google_auth_oauthlib, httplib2, apscheduler 3.x
+# без типов: googleapiclient (ответы API — dict), google_auth_oauthlib, httplib2, apscheduler 3.x,
+# imageio_ffmpeg
 [[tool.mypy.overrides]]
-module = ["googleapiclient.*", "google_auth_oauthlib.*", "httplib2", "apscheduler.*"]
+module = [
+    "googleapiclient.*", "google_auth_oauthlib.*", "httplib2", "apscheduler.*", "imageio_ffmpeg",
+]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

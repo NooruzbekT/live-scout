@@ -13,9 +13,23 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ttmon.ai.base import ClassifyInput, ClassifyResult, Usage, describe
+from ttmon.ai.base import (
+    ClassifyInput,
+    ClassifyResult,
+    Usage,
+    VoiceInput,
+    VoiceResult,
+    describe,
+    describe_voice,
+)
 from ttmon.ai.prices import normalize
-from ttmon.ai.schema import InvalidAnswer, parse_answer, response_schema
+from ttmon.ai.schema import (
+    InvalidAnswer,
+    parse_answer,
+    parse_voice,
+    response_schema,
+    voice_schema,
+)
 from ttmon.settings import AIConfig
 
 log = structlog.get_logger(__name__)
@@ -90,6 +104,7 @@ class GeminiClassifier:
         cfg: AIConfig,
         categories: list[str],
         system_prompt: str,
+        voice_prompt: str = "",
         client_factory: Callable[[str], Any] | None = None,
         retry_wait: Any = None,
     ) -> None:
@@ -117,12 +132,19 @@ class GeminiClassifier:
             response_json_schema=response_schema(categories),
             thinking_config=types.ThinkingConfig(thinking_budget=cfg.thinking_budget),
         )
+        self._voice_config = types.GenerateContentConfig(
+            system_instruction=voice_prompt,
+            temperature=0,
+            response_mime_type="application/json",
+            response_json_schema=voice_schema(),
+            thinking_config=types.ThinkingConfig(thinking_budget=cfg.thinking_budget),
+        )
 
     @property
     def model(self) -> str:
         return self._model
 
-    async def _generate(self, contents: types.Content) -> Any:
+    async def _generate(self, contents: types.Content, config: types.GenerateContentConfig) -> Any:
         max_wait = self._cfg.retry_wait_max_seconds
 
         def wait(state: RetryCallState) -> float:
@@ -148,17 +170,19 @@ class GeminiClassifier:
                         error=type(previous).__name__,
                     )
                 return await self._client.aio.models.generate_content(
-                    model=self._model, contents=contents, config=self._config
+                    model=self._model, contents=contents, config=config
                 )
         raise AssertionError("unreachable: AsyncRetrying с reraise=True")
 
-    async def _generate_any_key(self, contents: types.Content) -> Any:
+    async def _generate_any_key(
+        self, contents: types.Content, config: types.GenerateContentConfig
+    ) -> Any:
         """Суточная квота или отказ ключа — тот же запрос со следующим ключом (квота считается
         на проект Google Cloud). Назад не переключаемся; ключи
         кончились — AIUnavailable."""
         while True:
             try:
-                return await self._generate(contents)
+                return await self._generate(contents, config)
             except errors.APIError as exc:
                 if key_rejected(exc):
                     reason = f"Gemini {exc.code}: {exc.status}"
@@ -192,7 +216,7 @@ class GeminiClassifier:
         error = "нет ответа"
         usage = Usage()
         for _ in range(self._cfg.invalid_answer_retries + 1):
-            response = await self._generate_any_key(contents)
+            response = await self._generate_any_key(contents, self._config)
             usage = _usage(response, usage)
             raw = response.text
             try:
@@ -215,6 +239,40 @@ class GeminiClassifier:
             )
             return ClassifyResult(result, self._model, raw, None, usage)
         return ClassifyResult(None, self._model, raw, error, usage)
+
+    async def listen(self, data: VoiceInput) -> VoiceResult:
+        contents = types.Content(
+            role="user",
+            parts=[
+                types.Part.from_bytes(data=data.audio_mp3, mime_type="audio/mp3"),
+                types.Part.from_text(text=describe_voice(data)),
+            ],
+        )
+        raw: str | None = None
+        error = "нет ответа"
+        usage = Usage()
+        for _ in range(self._cfg.invalid_answer_retries + 1):
+            response = await self._generate_any_key(contents, self._voice_config)
+            usage = _usage(response, usage)
+            raw = response.text
+            try:
+                answer = parse_voice(raw or "")
+            except InvalidAnswer as exc:
+                error = str(exc)
+                log.warning("ai_invalid_answer", username=data.username, error=error, voice=True)
+                continue
+            prices = [normalize(p.to_price()) for p in answer.prices]
+            log.info(
+                "ai_listened",
+                username=data.username,
+                prices=len(prices),
+                speech=answer.speech,
+                key=self._key_index + 1,
+                prompt_tokens=usage.prompt_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            return VoiceResult(prices, answer.speech, raw, None, usage)
+        return VoiceResult([], None, raw, error, usage)
 
 
 def _usage(response: Any, previous: Usage) -> Usage:

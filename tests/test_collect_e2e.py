@@ -1,6 +1,7 @@
 """Сквозной прогон слота против подставного TikTok: настоящий Chrome (headless), страницы
 поиска и эфиров отдаются из шаблонов ниже, всё остальное — abort, сеть не используется."""
 
+import asyncio
 import contextlib
 import json
 import random
@@ -15,7 +16,8 @@ import pytest
 from playwright.async_api import BrowserContext, Route
 from sqlalchemy import select
 
-from ttmon.ai.base import ClassifyInput, ClassifyResult
+from ttmon.ai.base import ClassifyInput, ClassifyResult, VoiceInput, VoiceResult
+from ttmon.ai.gemini import AIUnavailable
 from ttmon.ai.schema import Classification, Price
 from ttmon.collector import selectors as sel
 from ttmon.collector.browser import BrowserLaunchError, open_browser
@@ -283,22 +285,35 @@ async def test_captcha_on_room_stops_slot(config: AppConfig, db_file: Path) -> N
 
 
 class SellingByName:
-    """Продающие — ники с префиксом sell; ник bad — ответ так и не прошёл схему."""
+    """Продающие — ники с префиксом sell; ник bad — ответ так и не прошёл схему;
+    в нике noprice — цены на экране нет. Звук: цена 5000, ник voicefail — сбой API."""
 
     model = "fake"
+
+    def __init__(self) -> None:
+        self.heard: list[VoiceInput] = []
 
     async def classify(self, data: ClassifyInput) -> ClassifyResult:
         if data.username == "bad":
             return ClassifyResult(None, "fake", "oops", "ответ не по схеме")
         selling = data.username.startswith("sell")
+        screen = [Price(item="Куртка", raw="3500тг", amount=3500, source="screen")]
         verdict = Classification(
             is_selling=selling,
             confidence=0.95 if selling else 0.05,
             category="Одежда женская" if selling else "Другое",
-            prices=[Price(item="Куртка", raw="3500тг", amount=3500, source="screen")],
+            products=["куртка"],
+            prices=[] if "noprice" in data.username else screen,
             reason="тест",
         )
         return ClassifyResult(verdict, "fake", "{}")
+
+    async def listen(self, data: VoiceInput) -> VoiceResult:
+        self.heard.append(data)
+        if "voicefail" in data.username:
+            raise ConnectionError("503")
+        price = Price(item="Куртка", raw="бес мың", amount=5000, source="voice")
+        return VoiceResult([price], "Продавец называет цену куртки.", "{}")
 
 
 async def test_ai_numbers_selling_rooms(config: AppConfig, db_file: Path) -> None:
@@ -375,6 +390,9 @@ class FlakyAI:
             raise ConnectionError("quota or network")
         return await SellingByName().classify(data)
 
+    async def listen(self, data: VoiceInput) -> VoiceResult:
+        raise NotImplementedError
+
 
 async def test_ai_outage_keeps_room_then_stops_slot(config: AppConfig, db_file: Path) -> None:
     tiktok = FakeTikTok(["sell1", "sell2", "sell3", "sell4", "sell5"], [], {})
@@ -449,3 +467,141 @@ async def test_passkey_prompt_over_results_dismissed(config: AppConfig, db_file:
     result = await _collect(config, db_file, tiktok, 10, FakeSleep())
 
     assert (result.status, result.saved, result.failed) == (RunStatus.OK, 2, 0)
+
+
+def _files(directory: Path) -> list[Path]:
+    return [p for p in directory.rglob("*") if p.is_file()]
+
+
+def _write_fake_mp3(out: Path) -> Path:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(b"ID3fake")
+    return out
+
+
+class FakeRecorder:
+    """Ник с hang — запись висит, пока её не отменят; с mute — ffmpeg не записал звук."""
+
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.cancelled: list[str] = []
+
+    async def __call__(self, url: str, out: Path, seconds: int) -> Path | None:
+        user = out.name.rsplit("_", 1)[0]
+        self.started.append(user)
+        try:
+            if "hang" in user:
+                await asyncio.Event().wait()
+            if "mute" in user:
+                return None
+            if "boom" in user:
+                raise RuntimeError("ffmpeg не запустился")
+            return _write_fake_mp3(out)
+        except asyncio.CancelledError:
+            self.cancelled.append(user)
+            raise
+
+
+async def test_voice_pass_only_for_selling_without_prices(config: AppConfig, db_file: Path) -> None:
+    users = ["sellnoprice", "sell1", "gamehang", "sellnoprice_mute", "sellnoprice_voicefail"]
+    tiktok = FakeTikTok(users, [], {})
+    ai, recorder = SellingByName(), FakeRecorder()
+    collector = SlotCollector(
+        config,
+        "test",
+        10,
+        db_file.parent / "screenshots",
+        FakeSleep(),
+        random.Random(0),
+        tiktok.browser,
+        ai,
+        recorder,
+    )
+
+    result = await collector.collect(db_file)
+
+    assert (result.saved, result.failed) == (5, 0)
+    assert recorder.started == users
+    assert recorder.cancelled == ["gamehang"]
+    assert [v.username for v in ai.heard] == ["sellnoprice", "sellnoprice_voicefail"]
+    assert ai.heard[0].products == ["куртка"] and ai.heard[0].audio_mp3 == b"ID3fake"
+    _, streams = await _load(db_file)
+    by_name = {s.username: s for s in streams}
+    voiced = by_name["sellnoprice"]
+    assert json.loads(voiced.prices_json or "[]") == [
+        {"item": "Куртка", "raw": "бес мың", "amount": 5000, "currency": "KZT", "source": "voice"}
+    ]
+    assert voiced.audio_path is not None
+    # первый проход с ценой на экране, не продающий, без звука, сбой AI на звуке
+    for name in users[1:]:
+        assert by_name[name].audio_path is None
+    assert json.loads(by_name["sellnoprice_voicefail"].prices_json or "[]") == []
+    # звук остаётся только у эфира, где второй проход отработал
+    assert _files(db_file.parent / "audio") == [Path(voiced.audio_path)]
+
+
+async def test_no_audio_without_ai(config: AppConfig, db_file: Path) -> None:
+    tiktok = FakeTikTok(["shop1"], [], {})
+    recorder = FakeRecorder()
+    collector = SlotCollector(
+        config,
+        "test",
+        10,
+        db_file.parent / "screenshots",
+        FakeSleep(),
+        random.Random(0),
+        tiktok.browser,
+        record=recorder,
+    )
+
+    await collector.collect(db_file)
+
+    assert recorder.started == []
+
+
+async def test_audio_crash_keeps_selling_room(config: AppConfig, db_file: Path) -> None:
+    tiktok = FakeTikTok(["sellnoprice_boom"], [], {})
+    ai = SellingByName()
+    collector = SlotCollector(
+        config,
+        "test",
+        10,
+        db_file.parent / "screenshots",
+        FakeSleep(),
+        random.Random(0),
+        tiktok.browser,
+        ai,
+        FakeRecorder(),
+    )
+
+    result = await collector.collect(db_file)
+
+    assert (result.saved, result.failed, result.selling) == (1, 0, 1)
+    assert ai.heard == []
+
+
+class QuotaGone(SellingByName):
+    async def classify(self, data: ClassifyInput) -> ClassifyResult:
+        raise AIUnavailable("квота Gemini исчерпана")
+
+
+async def test_finished_audio_removed_when_room_aborted(config: AppConfig, db_file: Path) -> None:
+    tiktok = FakeTikTok(["sellnoprice"], [], {})
+    recorder = FakeRecorder()
+    collector = SlotCollector(
+        config,
+        "test",
+        10,
+        db_file.parent / "screenshots",
+        FakeSleep(),
+        random.Random(0),
+        tiktok.browser,
+        QuotaGone(),
+        recorder,
+    )
+
+    result = await collector.collect(db_file)
+
+    assert result.status == RunStatus.FAILED
+    assert recorder.started == ["sellnoprice"] and recorder.cancelled == []
+    assert _files(db_file.parent / "audio") == []
