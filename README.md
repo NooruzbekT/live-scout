@@ -41,8 +41,8 @@ sudo chown -R 1000:1000 runtime          # контейнер пишет под 
 cp .env.example .env                     # ключи и PANEL_PASSWORD='…' (≥ 12 символов, в одинарных кавычках)
 cp /путь/к/credentials.json /путь/к/token.json runtime/secrets/   # Google: токен с Windows подходит
 docker compose build
-docker compose run --rm --service-ports login   # http://127.0.0.1:6080/vnc.html, пароль — первые 8 символов
-                                                # PANEL_PASSWORD; войти в TikTok (удобно по QR), закрыть окно
+docker compose run --rm --service-ports login   # http://127.0.0.1:6080/vnc.html, пароль VNC печатается в консоль;
+                                                # войти в TikTok (удобно по QR), закрыть окно
 docker compose run --rm ttmon login --check
 docker compose up -d                     # панель http://127.0.0.1:8765 (логин любой, пароль PANEL_PASSWORD)
 docker compose logs -f

@@ -17,16 +17,15 @@ done
 
 if [ "$1" = "vnc-login" ]; then
     shift
-    # noVNC управляет Chrome с сессией TikTok: без пароля не открываем, как и панель
-    if [ "${#PANEL_PASSWORD}" -lt 12 ]; then
-        echo "Вход не запущен: нужен PANEL_PASSWORD не короче 12 символов в .env" >&2
-        exit 1
-    fi
+    # noVNC управляет Chrome с сессией TikTok: пароль случайный на запуск, не из PANEL_PASSWORD —
+    # VNC-auth (DES, 8 символов) перебирается, префикс пароля панели утёк бы
+    vncpass=$(python -c "import secrets; print(secrets.token_urlsafe(6))")
     # файлом, а не аргументом: аргументы видны в списке процессов
-    (umask 077 && printf '%s\n' "$PANEL_PASSWORD" > /tmp/vncpass)
+    (umask 077 && printf '%s\n' "$vncpass" > /tmp/vncpass)
     x11vnc -display :99 -localhost -forever -shared -quiet -passwdfile /tmp/vncpass >/dev/null 2>&1 &
     websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1 &
-    echo "Вход в TikTok: http://127.0.0.1:6080/vnc.html (пароль VNC — первые 8 символов PANEL_PASSWORD)"
+    echo "Вход в TikTok: http://127.0.0.1:6080/vnc.html  пароль VNC: $vncpass"
+    echo "После входа закройте окно Chrome — контейнер завершится."
     exec python -m ttmon login "$@"
 fi
 
