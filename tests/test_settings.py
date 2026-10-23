@@ -6,7 +6,15 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from ttmon.settings import CONFIG_FILE, PROJECT_ROOT, AppConfig, Settings, load_config
+from ttmon.settings import (
+    CONFIG_FILE,
+    CONFIG_OVERLAY_ENV,
+    PROJECT_ROOT,
+    AppConfig,
+    Settings,
+    load_config,
+    merge,
+)
 
 
 @pytest.fixture
@@ -37,11 +45,54 @@ def test_reversed_range_rejected(raw_config: dict[str, Any]) -> None:
         AppConfig.model_validate(raw_config)
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10"])
-def test_non_loopback_host_rejected(raw_config: dict[str, Any], host: str) -> None:
+@pytest.mark.parametrize(("host", "loopback"), [("0.0.0.0", False), ("127.0.0.1", True)])
+def test_web_host_any_ip(raw_config: dict[str, Any], host: str, loopback: bool) -> None:
     raw_config["web"]["host"] = host
-    with pytest.raises(ValidationError, match="loopback"):
+    assert AppConfig.model_validate(raw_config).web.is_loopback is loopback
+
+
+def test_web_host_must_be_ip(raw_config: dict[str, Any]) -> None:
+    raw_config["web"]["host"] = "panel.example.kz"
+    with pytest.raises(ValidationError):
         AppConfig.model_validate(raw_config)
+
+
+@pytest.mark.parametrize(
+    ("url", "origin"),
+    [
+        ("https://panel.example.kz/", "https://panel.example.kz"),
+        ("http://127.0.0.1:18765", "http://127.0.0.1:18765"),
+    ],
+)
+def test_public_url_reduced_to_origin(raw_config: dict[str, Any], url: str, origin: str) -> None:
+    raw_config["web"]["public_url"] = url
+    assert AppConfig.model_validate(raw_config).web.public_url == origin
+
+
+@pytest.mark.parametrize(
+    "url", ["panel.example.kz", "ftp://panel.example.kz", "https://x.kz/ttmon", "http://x.kz"]
+)
+def test_public_url_rejected(raw_config: dict[str, Any], url: str) -> None:
+    raw_config["web"]["public_url"] = url
+    with pytest.raises(ValidationError, match="public_url"):
+        AppConfig.model_validate(raw_config)
+
+
+def test_merge_overrides_leaves_and_keeps_siblings() -> None:
+    base = {"web": {"host": "127.0.0.1", "port": 8765}, "list": [1, 2]}
+    assert merge(base, {"web": {"host": "0.0.0.0"}, "list": [3]}) == {
+        "web": {"host": "0.0.0.0", "port": 8765},
+        "list": [3],
+    }
+
+
+def test_docker_overlay_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(CONFIG_OVERLAY_ENV, "docker/config.docker.yaml")
+    config = load_config()
+    assert config.web.host == "0.0.0.0" and config.web.port == 8765
+    assert config.browser.login_args == ["--no-sandbox"]
+    assert config.media.font_path.name == "DejaVuSans.ttf"
+    assert config.slots["morning"].start == time(9, 55)
 
 
 def test_unknown_key_rejected(raw_config: dict[str, Any]) -> None:

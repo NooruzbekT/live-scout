@@ -1,0 +1,11 @@
+# белый список: в образ — только код и конфиг; .env — через env_file, остальное — томами
+*
+!ttmon/
+!migrations/
+!prompts/
+!docker/
+!alembic.ini
+!config.yaml
+!pyproject.toml
+!requirements.txt
+**/__pycache__

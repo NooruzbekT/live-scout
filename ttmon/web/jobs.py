@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import datetime as dt
 import os
+import signal
 import subprocess
 import sys
 from collections import deque
@@ -43,7 +45,10 @@ def ttmon_command(*args: str) -> list[str]:
 
 
 async def _kill_tree(process: asyncio.subprocess.Process) -> None:
-    """collect запускает Chrome: kill одного python оставил бы браузер с открытым профилем."""
+    """collect запускает Chrome: kill одного python оставил бы браузер с открытым профилем.
+    На Linux задача — лидер своей группы (start_new_session): killpg убивает python, драйвер
+    Playwright и ffmpeg; Chrome Playwright держит в своей группе, он закрывается сам по обрыву
+    pipe драйвера."""
     if sys.platform == "win32":
         killer = await asyncio.create_subprocess_exec(
             str(TASKKILL),
@@ -56,7 +61,8 @@ async def _kill_tree(process: asyncio.subprocess.Process) -> None:
         )
         await killer.wait()
     else:
-        process.kill()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
     await process.wait()
 
 
@@ -118,6 +124,7 @@ class JobRunner:
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                start_new_session=sys.platform != "win32",
             )
         except OSError as exc:
             log.error("job_start_failed", job=name, error=str(exc))

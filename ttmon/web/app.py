@@ -12,7 +12,7 @@ from ttmon.db.session import create_engine, make_sessionmaker
 from ttmon.settings import AppConfig
 from ttmon.timeutil import now_almaty
 from ttmon.web import api, pages
-from ttmon.web.guard import allowed_hosts, csrf_guard
+from ttmon.web.guard import allowed_hosts, basic_auth, csrf_guard, security_headers
 from ttmon.web.jobs import JobRunner
 from ttmon.web.scheduler import build_scheduler, catch_up
 from ttmon.web.service import MEDIA_URL, report_built_after_evening, runs_for
@@ -27,9 +27,11 @@ def create_app(
     *,
     runner: JobRunner | None = None,
     schedule: bool = True,
+    panel_password: str | None = None,
 ) -> FastAPI:
     """БД мигрирует вызывающий: upgrade_to_head внутри вызывает asyncio.run, из работающего
-    loop нельзя."""
+    loop нельзя. panel_password — HTTP Basic на всё; без него панель открыта (только loopback,
+    проверяет check_exposure)."""
     job_runner = runner or JobRunner()
 
     @asynccontextmanager
@@ -61,8 +63,12 @@ def create_app(
             await engine.dispose()
 
     app = FastAPI(title="TT Live Monitor", lifespan=lifespan, docs_url=None, redoc_url=None)
+    # последний добавленный — внешний: заголовки → Host → пароль → CSRF
     app.middleware("http")(csrf_guard(cfg.web))
+    if panel_password is not None:
+        app.middleware("http")(basic_auth(panel_password))
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts(cfg.web))
+    app.middleware("http")(security_headers)
     app.state.cfg = cfg
     app.state.runner = job_runner
     app.state.screenshots_dir = screenshots_dir

@@ -27,6 +27,27 @@ python -m ttmon report --test           # отчёт по тестовому с�
 python -m ttmon doctor
 ```
 
+## Docker (Linux-сервер)
+
+Данные контейнера — в `runtime/` (не `data/`): профиль Chrome у Linux свой, вход в TikTok — заново.
+Порты панели (8765) и входа (6080) открыты только на `127.0.0.1` сервера, снаружи — SSH-туннель:
+`ssh -L 8765:127.0.0.1:8765 -L 6080:127.0.0.1:6080 user@server`. Локальный порт занят — другой
+(`-L 18765:127.0.0.1:8765`) и `web.public_url: http://127.0.0.1:18765` в `docker/config.docker.yaml`,
+иначе кнопки панели ответят 403.
+
+```bash
+mkdir -p runtime/data runtime/logs runtime/chrome-profile runtime/secrets
+sudo chown -R 1000:1000 runtime          # контейнер пишет под uid 1000 (другой — TTMON_UID/TTMON_GID в .env)
+cp .env.example .env                     # ключи и PANEL_PASSWORD='…' (≥ 12 символов, в одинарных кавычках)
+cp /путь/к/credentials.json /путь/к/token.json runtime/secrets/   # Google: токен с Windows подходит
+docker compose build
+docker compose run --rm --service-ports login   # http://127.0.0.1:6080/vnc.html, пароль — первые 8 символов
+                                                # PANEL_PASSWORD; войти в TikTok (удобно по QR), закрыть окно
+docker compose run --rm ttmon login --check
+docker compose up -d                     # панель http://127.0.0.1:8765 (логин любой, пароль PANEL_PASSWORD)
+docker compose logs -f
+```
+
 ## Проверки
 
 ```powershell

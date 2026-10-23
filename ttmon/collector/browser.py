@@ -1,7 +1,9 @@
 import contextlib
 import subprocess
+import sys
 from collections.abc import AsyncIterator
 from enum import StrEnum
+from pathlib import Path
 
 import structlog
 from playwright.async_api import BrowserContext, Page, async_playwright
@@ -33,12 +35,25 @@ class BrowserLaunchError(RuntimeError):
     pass
 
 
+SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+def prepare_profile(profile: Path) -> Path:
+    """Linux: Chrome, убитый вместе с контейнером, оставляет SingletonLock (симлинк host-pid),
+    и на bind-mount с диска Windows следующий Chrome на нём виснет до таймаута. Вызывается
+    под collect.lock — живого Chrome на профиле в этот момент нет."""
+    profile.mkdir(parents=True, exist_ok=True)
+    if sys.platform != "win32":
+        for name in SINGLETON_FILES:
+            (profile / name).unlink(missing_ok=True)
+    return profile
+
+
 @contextlib.asynccontextmanager
 async def open_browser(
     cfg: AppConfig, *, headless: bool | None = None
 ) -> AsyncIterator[BrowserContext]:
-    profile = project_path(cfg.browser.profile_dir)
-    profile.mkdir(parents=True, exist_ok=True)
+    profile = prepare_profile(project_path(cfg.browser.profile_dir))
     async with async_playwright() as pw:
         try:
             context = await pw.chromium.launch_persistent_context(
@@ -153,10 +168,15 @@ def interactive_login(cfg: AppConfig) -> None:
     chrome = cfg.browser.chrome_path
     if not chrome.is_file():
         raise BrowserLaunchError(f"Chrome не найден: {chrome} (browser.chrome_path в config.yaml)")
-    profile = project_path(cfg.browser.profile_dir)
-    profile.mkdir(parents=True, exist_ok=True)
+    profile = prepare_profile(project_path(cfg.browser.profile_dir))
     log.info("login_window_opened", chrome=str(chrome))
     subprocess.run(
-        [str(chrome), f"--user-data-dir={profile}", "--no-first-run", sel.LOGIN_URL],
+        [
+            str(chrome),
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            *cfg.browser.login_args,
+            sel.LOGIN_URL,
+        ],
         check=False,
     )

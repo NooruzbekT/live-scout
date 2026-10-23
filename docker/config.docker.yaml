@@ -1,0 +1,11 @@
+# Поверх config.yaml в контейнере (TTMON_CONFIG_OVERLAY): только отличия Linux-окружения.
+
+browser:
+  chrome_path: /opt/google/chrome/chrome   # ставит playwright install chrome
+  login_args: [--no-sandbox]               # sandbox Chrome в контейнере без привилегий не стартует
+
+media:
+  font_path: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+
+web:
+  host: 0.0.0.0                 # наружу порт публикует compose (127.0.0.1); нужен PANEL_PASSWORD

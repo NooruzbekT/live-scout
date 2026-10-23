@@ -1,8 +1,10 @@
+import os
 from datetime import datetime, time
 from functools import cache
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
@@ -20,6 +22,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = PROJECT_ROOT / "config.yaml"
+# YAML поверх config.yaml (глубокое слияние): отличия окружения, например Docker
+CONFIG_OVERLAY_ENV = "TTMON_CONFIG_OVERLAY"
 
 SlotName = Literal["morning", "noon", "evening"]
 SourceName = Literal["search", "following", "feed"]
@@ -98,6 +102,7 @@ class BrowserConfig(_Section):
     viewport: Viewport
     locale: str
     headless: bool
+    login_args: list[str] = []
 
 
 class GuardsConfig(_Section):
@@ -161,13 +166,36 @@ class ReportConfig(_Section):
 class WebConfig(_Section):
     host: str
     port: int = Field(ge=1, le=65535)
+    # адрес панели за обратным прокси (https://домен): его Host и Origin разрешены
+    public_url: str | None = None
 
     @field_validator("host")
     @classmethod
-    def _loopback_only(cls, value: str) -> str:
-        if value != "localhost" and not ip_address(value).is_loopback:
-            raise ValueError("панель без авторизации: допустим только loopback-адрес")
+    def _ip_or_localhost(cls, value: str) -> str:
+        if value != "localhost":
+            ip_address(value)
         return value
+
+    @field_validator("public_url")
+    @classmethod
+    def _origin_only(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if (
+            parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or parts.path not in ("", "/")
+        ):
+            raise ValueError("public_url — схема и хост без пути: https://panel.example.kz")
+        # Basic по http — пароль открытым текстом; http только для туннеля на свой порт
+        if parts.scheme == "http" and parts.hostname not in ("127.0.0.1", "localhost"):
+            raise ValueError("public_url снаружи — только https")
+        return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def is_loopback(self) -> bool:
+        return self.host == "localhost" or ip_address(self.host).is_loopback
 
 
 class PathsConfig(_Section):
@@ -248,6 +276,7 @@ class Settings(BaseSettings):
     google_token_file: Path = Path("secrets/token.json")
     # ID шаблона — в .env, не в config.yaml: по ссылке на файл видна публичная папка со скриншотами
     google_template_sheet_id: str = ""
+    panel_password: SecretStr | None = None
 
     def gemini_api_keys(self) -> list[str]:
         if self.gemini_api_key is None:
@@ -264,9 +293,28 @@ class Settings(BaseSettings):
         return project_path(value)
 
 
-def load_config(path: Path = CONFIG_FILE) -> AppConfig:
+def merge(base: Any, overlay: Any) -> Any:
+    """Словари сливаются по ключам, всё остальное (списки, значения) overlay заменяет целиком."""
+    if not (isinstance(base, dict) and isinstance(overlay, dict)):
+        return overlay
+    merged = dict(base)
+    for key, value in overlay.items():
+        merged[key] = merge(base[key], value) if key in base else value
+    return merged
+
+
+def _read_yaml(path: Path) -> Any:
     with path.open(encoding="utf-8") as fh:
-        data: Any = yaml.safe_load(fh)
+        return yaml.safe_load(fh)
+
+
+def load_config(path: Path = CONFIG_FILE, overlay: Path | None = None) -> AppConfig:
+    """overlay по умолчанию — из переменной TTMON_CONFIG_OVERLAY (путь от корня проекта)."""
+    data = _read_yaml(path)
+    if overlay is None and (env := os.environ.get(CONFIG_OVERLAY_ENV)):
+        overlay = Path(env)
+    if overlay is not None:
+        data = merge(data, _read_yaml(project_path(overlay)))
     return AppConfig.model_validate(data)
 
 

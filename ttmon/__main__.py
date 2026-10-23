@@ -16,7 +16,7 @@ from ttmon.db.models import RunStatus
 from ttmon.google.auth import GoogleAuthError
 from ttmon.google.auth import login as google_login_flow
 from ttmon.lock import AlreadyRunning, exclusive_lock
-from ttmon.logging import setup_logging
+from ttmon.logging import register_secret, setup_logging
 from ttmon.report.commands import GOOGLE_ERRORS, error_text, report_command, upload_after_slot
 from ttmon.settings import AppConfig, get_config, get_settings, project_path
 from ttmon.timeutil import today_almaty
@@ -34,6 +34,7 @@ EXIT_ALREADY_RUNNING = 9
 EXIT_AI_CONFIG = 10
 EXIT_EVAL_FAILED = 11
 EXIT_GOOGLE = 12
+EXIT_UNSAFE_PANEL = 13
 
 COLLECT_EXIT_CODES = {
     RunStatus.OK: 0,
@@ -94,13 +95,23 @@ def serve() -> None:
     from ttmon.db.migrate import upgrade_to_head
     from ttmon.media.layout import SCREENSHOTS_DIR
     from ttmon.web.app import create_app
+    from ttmon.web.guard import UnsafeExposure, check_exposure
 
     config = get_config()
+    secret = get_settings().panel_password
+    password = secret.get_secret_value() if secret else None
+    try:
+        check_exposure(config.web, password)
+    except UnsafeExposure as exc:
+        typer.echo(f"Панель не запущена: {exc}", err=True)
+        raise typer.Exit(EXIT_UNSAFE_PANEL) from exc
+    if password is not None:
+        register_secret(password)
     db_file = project_path(config.paths.db_file)
     upgrade_to_head(db_file)
     screenshots = project_path(config.paths.data_dir) / SCREENSHOTS_DIR
-    web = create_app(config, db_file, screenshots)
-    typer.echo(f"Панель: http://{config.web.host}:{config.web.port}")
+    web = create_app(config, db_file, screenshots, panel_password=password)
+    typer.echo(f"Панель: {config.web.public_url or f'http://127.0.0.1:{config.web.port}'}")
     # log_config=None: логи идут через structlog (файл serve), access-лог не нужен
     uvicorn.run(web, host=config.web.host, port=config.web.port, log_config=None, access_log=False)
 

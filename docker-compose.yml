@@ -1,0 +1,39 @@
+# Данные — в ${TTMON_RUNTIME:-./runtime}, не в data/ проекта: профиль Chrome у Linux свой.
+# Порты — только на 127.0.0.1 сервера, снаружи — через SSH-туннель.
+
+x-ttmon: &ttmon
+  build: .
+  image: ttmon:latest
+  env_file: .env
+  # UID bash не экспортирует, поэтому свои имена; задаются в .env (compose читает его сам)
+  user: "${TTMON_UID:-1000}:${TTMON_GID:-1000}"
+  init: true
+  shm_size: 1gb
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  volumes:
+    - ${TTMON_RUNTIME:-./runtime}/data:/app/data
+    - ${TTMON_RUNTIME:-./runtime}/logs:/app/logs
+    - ${TTMON_RUNTIME:-./runtime}/chrome-profile:/app/chrome-profile
+    - ${TTMON_RUNTIME:-./runtime}/secrets:/app/secrets
+
+services:
+  ttmon:
+    <<: *ttmon
+    command: ["serve"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "docker/healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  login:
+    <<: *ttmon
+    profiles: ["login"]
+    command: ["vnc-login"]
+    ports:
+      - "127.0.0.1:6080:6080"

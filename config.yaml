@@ -48,6 +48,7 @@ browser:
   viewport: {width: 1440, height: 900}
   locale: ru-RU
   headless: false
+  login_args: []                # доп. флаги Chrome для ttmon login (Docker: --no-sandbox)
 
 guards:                         # «подряд» = без успешной страницы между ними
   page_timeout_seconds: 30      # страница не загрузилась → пропуск эфира
@@ -110,8 +111,9 @@ report:
   no_price_text: "не указана"
 
 web:
-  host: 127.0.0.1               # только loopback: панель без авторизации
+  host: 127.0.0.1               # не loopback — только с PANEL_PASSWORD в .env (Docker: 0.0.0.0)
   port: 8765                    # 8000 часто занят (Docker)
+  public_url: null              # https://домен панели за обратным прокси, если будет
 
 paths:                          # относительные пути считаются от корня проекта
   data_dir: data
